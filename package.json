@@ -1,0 +1,12 @@
+{
+  "name": "king-bot",
+  "version": "1.0.0",
+  "main": "king.js",
+  "scripts": {
+    "start": "node king.js"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "^6.8.8",
+    "pino": "^8.0.0"
+  }
+}
