@@ -1,34 +1,54 @@
-const { makeWASocket, useMultiFileAuthState } = require("@whiskeysockets/baileys");
-const readline = require("readline");
-const { delay } = require("@whiskeysockets/baileys");
+const { makeWASocket, useMultiFileAuthState, fetchLatestBaileysVersion, makeInMemoryStore, jidDecode, DisconnectReason, delay } = require("@whiskeysockets/baileys");
+const P = require("pino");
+const fs = require("fs");
+const path = require("path");
 
-const rl = readline.createInterface({
-  input: process.stdin,
-  output: process.stdout
-});
+const store = makeInMemoryStore({ logger: P().child({ level: "silent", stream: "store" }) });
+store.readFromFile("./baileys_store.json");
+setInterval(() => {
+    store.writeToFile("./baileys_store.json");
+}, 10_000);
 
-async function startBot() {
-  const { state, saveCreds } = await useMultiFileAuthState("session");
+const startKingBot = async () => {
+    const { state, saveCreds } = await useMultiFileAuthState("session");
 
-  const sock = makeWASocket({
-    auth: state,
-    printQRInTerminal: false,
-  });
+    const { version, isLatest } = await fetchLatestBaileysVersion();
 
-  sock.ev.on("creds.update", saveCreds);
+    const sock = makeWASocket({
+        version,
+        logger: P({ level: "silent" }),
+        printQRInTerminal: true,
+        auth: state,
+        browser: ['KING BOT', 'Chrome', '1.0.0'],
+        syncFullHistory: false
+    });
 
-  // Ask for phone number
-  rl.question("📞 ENTER PHONE NUMBER TO PAIR WITH WHATSAPP (e.g. +234XXXXXXXXXX): ", async (number) => {
-    console.log("\n🔁 WAITING FOR PAIRING CODE...");
+    store.bind(sock.ev);
+    sock.ev.on("creds.update", saveCreds);
 
-    await delay(1000);
+    // Load all plugin commands
+    const pluginsDir = path.join(__dirname, "plugins");
+    const plugins = fs.readdirSync(pluginsDir).filter(file => file.endsWith(".js"));
 
-    const code = await sock.requestPairingCode(number.trim());
-    console.log("\n✅ PAIRING CODE GENERATED:");
-    console.log(`\n👉 YOUR PAIRING CODE: \x1b[32m${code}\x1b[0m`);
+    for (const pluginFile of plugins) {
+        const plugin = require(path.join(pluginsDir, pluginFile));
+        if (typeof plugin === "function") plugin(sock, store);
+    }
 
-    rl.close();
-  });
-}
+    // Connection closed handler
+    sock.ev.on("connection.update", ({ connection, lastDisconnect }) => {
+        if (connection === "close") {
+            const reason = new Boom(lastDisconnect?.error)?.output?.statusCode;
+            if (reason === DisconnectReason.loggedOut) {
+                console.log("🔌 Logged out. Delete session and restart.");
+            } else {
+                console.log("🔁 Reconnecting...");
+                startKingBot();
+            }
+        } else if (connection === "open") {
+            console.log("✅ BOT connected successfully!");
+        }
+    });
+};
 
-startBot();
+startKingBot();
