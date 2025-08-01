@@ -9,7 +9,6 @@ module.exports = {
 • .faketyping
 • .fakerecord
 `;
-
         await sock.sendMessage(m.key.remoteJid, { text: msg }, { quoted: m });
     }
 };
