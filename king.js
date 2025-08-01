@@ -1,69 +1,34 @@
-const {
-  makeWASocket,
-  useMultiFileAuthState,
-  DisconnectReason,
-  makeInMemoryStore,
-  fetchLatestBaileysVersion
-} = require('@whiskeysockets/baileys');
+const { makeWASocket, useMultiFileAuthState } = require("@whiskeysockets/baileys");
+const readline = require("readline");
+const { delay } = require("@whiskeysockets/baileys");
 
-const { Boom } = require('@hapi/boom');
-const pino = require('pino');
-const readline = require('readline');
+const rl = readline.createInterface({
+  input: process.stdin,
+  output: process.stdout
+});
 
-const startBot = async () => {
-  const { state, saveCreds } = await useMultiFileAuthState('auth_info');
-  const { version, isLatest } = await fetchLatestBaileysVersion();
+async function startBot() {
+  const { state, saveCreds } = await useMultiFileAuthState("session");
 
   const sock = makeWASocket({
-    version,
-    logger: pino({ level: 'silent' }),
     auth: state,
-    printQRInTerminal: true
+    printQRInTerminal: false,
   });
 
-  sock.ev.on('creds.update', saveCreds);
-  sock.ev.on('connection.update', async (update) => {
-    const { connection, lastDisconnect } = update;
+  sock.ev.on("creds.update", saveCreds);
 
-    if (connection === 'close') {
-      const shouldReconnect =
-        lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
-      console.log('Connection closed due to', lastDisconnect.error, ', reconnecting:', shouldReconnect);
-      if (shouldReconnect) {
-        startBot();
-      }
-    } else if (connection === 'open') {
-      console.log('✅ Bot is connected');
-    }
+  // Ask for phone number
+  rl.question("📞 ENTER PHONE NUMBER TO PAIR WITH WHATSAPP (e.g. +234XXXXXXXXXX): ", async (number) => {
+    console.log("\n🔁 WAITING FOR PAIRING CODE...");
+
+    await delay(1000);
+
+    const code = await sock.requestPairingCode(number.trim());
+    console.log("\n✅ PAIRING CODE GENERATED:");
+    console.log(`\n👉 YOUR PAIRING CODE: \x1b[32m${code}\x1b[0m`);
+
+    rl.close();
   });
-
-  sock.ev.on('messages.upsert', async (m) => {
-    const msg = m.messages[0];
-    if (!msg.message || msg.key.fromMe) return;
-
-    const from = msg.key.remoteJid;
-    const text = msg.message.conversation || msg.message.extendedTextMessage?.text || "";
-
-    if (text.startsWith('.menu')) {
-      await sock.sendMessage(from, { text: `👑 *KING BOT MENU*\n\n.menu - Show this menu\n.music <name>\n.movie <title>\n.fakeTyping\n.fakeRecord` });
-    }
-
-    if (text.startsWith('.fakeTyping')) {
-      await sock.sendPresenceUpdate('composing', from);
-    }
-
-    if (text.startsWith('.fakeRecord')) {
-      await sock.sendPresenceUpdate('recording', from);
-    }
-
-    if (text.startsWith('.music')) {
-      await sock.sendMessage(from, { text: `🎵 Music search for "${text.split(' ')[1]}" coming soon!` });
-    }
-
-    if (text.startsWith('.movie')) {
-      await sock.sendMessage(from, { text: `🎬 Movie info for "${text.split(' ')[1]}" coming soon!` });
-    }
-  });
-};
+}
 
 startBot();
