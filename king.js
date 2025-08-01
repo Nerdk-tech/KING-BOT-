@@ -1,35 +1,69 @@
-const { default: WAConnection, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } = require("@whiskeysockets/baileys");
-const pino = require("pino");
-const fs = require("fs");
-const path = require("path");
+const {
+  makeWASocket,
+  useMultiFileAuthState,
+  DisconnectReason,
+  makeInMemoryStore,
+  fetchLatestBaileysVersion
+} = require('@whiskeysockets/baileys');
 
-async function startBot() {
-    const { state, saveCreds } = await useMultiFileAuthState("auth");
-    const { version, isLatest } = await fetchLatestBaileysVersion();
+const { Boom } = require('@hapi/boom');
+const pino = require('pino');
+const readline = require('readline');
 
-    const sock = WAConnection({
-        version,
-        printQRInTerminal: true,
-        auth: state,
-        logger: pino({ level: "silent" }),
-        browser: ["KING-BOT", "Safari", "1.0.0"]
-    });
+const startBot = async () => {
+  const { state, saveCreds } = await useMultiFileAuthState('auth_info');
+  const { version, isLatest } = await fetchLatestBaileysVersion();
 
-    sock.ev.on("creds.update", saveCreds);
+  const sock = makeWASocket({
+    version,
+    logger: pino({ level: 'silent' }),
+    auth: state,
+    printQRInTerminal: true
+  });
 
-    sock.ev.on("messages.upsert", async ({ messages }) => {
-        const m = messages[0];
-        if (!m.message || m.key.fromMe) return;
+  sock.ev.on('creds.update', saveCreds);
+  sock.ev.on('connection.update', async (update) => {
+    const { connection, lastDisconnect } = update;
 
-        require("./lib/handler")(sock, m);
-    });
+    if (connection === 'close') {
+      const shouldReconnect =
+        lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
+      console.log('Connection closed due to', lastDisconnect.error, ', reconnecting:', shouldReconnect);
+      if (shouldReconnect) {
+        startBot();
+      }
+    } else if (connection === 'open') {
+      console.log('✅ Bot is connected');
+    }
+  });
 
-    sock.ev.on("connection.update", (update) => {
-        const { connection, lastDisconnect } = update;
-        if (connection === "close" && lastDisconnect.error?.output?.statusCode !== DisconnectReason.loggedOut) {
-            startBot();
-        }
-    });
-}
+  sock.ev.on('messages.upsert', async (m) => {
+    const msg = m.messages[0];
+    if (!msg.message || msg.key.fromMe) return;
+
+    const from = msg.key.remoteJid;
+    const text = msg.message.conversation || msg.message.extendedTextMessage?.text || "";
+
+    if (text.startsWith('.menu')) {
+      await sock.sendMessage(from, { text: `👑 *KING BOT MENU*\n\n.menu - Show this menu\n.music <name>\n.movie <title>\n.fakeTyping\n.fakeRecord` });
+    }
+
+    if (text.startsWith('.fakeTyping')) {
+      await sock.sendPresenceUpdate('composing', from);
+    }
+
+    if (text.startsWith('.fakeRecord')) {
+      await sock.sendPresenceUpdate('recording', from);
+    }
+
+    if (text.startsWith('.music')) {
+      await sock.sendMessage(from, { text: `🎵 Music search for "${text.split(' ')[1]}" coming soon!` });
+    }
+
+    if (text.startsWith('.movie')) {
+      await sock.sendMessage(from, { text: `🎬 Movie info for "${text.split(' ')[1]}" coming soon!` });
+    }
+  });
+};
 
 startBot();
