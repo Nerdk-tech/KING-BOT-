@@ -1,66 +1,108 @@
-const { default: makeWASocket, useMultiFileAuthState, makeCacheableSignalKeyStore, fetchLatestBaileysVersion } = require("@whiskeysockets/baileys");
-const readline = require("readline");
-const pino = require("pino");
+const {
+  default: makeWASocket,
+  useMultiFileAuthState,
+  DisconnectReason,
+  fetchLatestBaileysVersion,
+  makeInMemoryStore,
+  getAggregateVotesInPollMessage,
+  jidNormalizedUser,
+  makeCacheableSignalKeyStore,
+  makeWALegacySocket,
+  PHONENUMBER_MCC,
+  proto,
+  delay,
+  Browsers,
+  makeAuthState,
+  makeRenewableMessageRelayCache,
+  makeMessagesRx,
+  downloadMediaMessage,
+  generateForwardMessageContent,
+  getContentType,
+  generateWAMessageFromContent,
+  generateWAMessageContent,
+  generateWAMessage,
+  prepareWAMessageMedia,
+  jidDecode,
+  WA_DEFAULT_EPHEMERAL,
+  relayWAMessage,
+  getAggregateVotesInPoll,
+  fetchLatestBaileysVersions,
+  getDevice,
+  useSingleFileAuthState,
+  makeCacheableSignalKeyStore as storeSignalKeyStore,
+  BufferJSON,
+  initAuthCreds,
+  useAuthStore,
+  makeWAMessage,
+  getLogger
+} = require("@whiskeysockets/baileys");
+
+const P = require("pino");
 const fs = require("fs");
 const path = require("path");
 
-console.log("🔗 Connecting...");
-
-// Ask for number
-const rl = readline.createInterface({
-  input: process.stdin,
-  output: process.stdout
-});
-
-async function startBot() {
-  const { version } = await fetchLatestBaileysVersion();
-  const { state, saveCreds } = await useMultiFileAuthState("auth");
+const startBot = async () => {
+  const { state, saveCreds } = await useMultiFileAuthState("./session");
 
   const sock = makeWASocket({
-    version,
-    auth: {
-      creds: state.creds,
-      keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "silent" }))
-    },
-    printQRInTerminal: true,
-    logger: pino({ level: "silent" })
+    auth: state,
+    printQRInTerminal: false,
+    logger: P({ level: "silent" }),
+    browser: ["KING-BOT", "Safari", "3.0"]
   });
 
+  sock.ev.on("connection.update", async (update) => {
+    const { connection, lastDisconnect, qr, isNewLogin, pairingCode } = update;
+
+    if (connection === "open") {
+      console.log("✅ Connected!");
+    }
+
+    if (update.pairingCode) {
+      console.log(`🔗 Pair your device by visiting: https://web.whatsapp.com`);
+      console.log(`📲 Your Pairing Code: ${update.pairingCode}`);
+    }
+
+    if (connection === "close") {
+      const shouldReconnect =
+        lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
+      console.log("Connection closed. Reconnecting: ", shouldReconnect);
+      if (shouldReconnect) {
+        startBot();
+      }
+    }
+  });
+
+  // Auto save session
   sock.ev.on("creds.update", saveCreds);
 
   // Load plugins
   const pluginFolder = path.join(__dirname, "plugins");
   if (fs.existsSync(pluginFolder)) {
-    fs.readdirSync(pluginFolder).forEach(file => {
-      if (file.endsWith(".js")) {
-        const plugin = require(path.join(pluginFolder, file));
-        sock.ev.on("messages.upsert", async ({ messages }) => {
-          const m = messages[0];
-          if (!m.message || !m.key || m.key.fromMe) return;
-          const text = m.message?.conversation || m.message?.extendedTextMessage?.text;
-          if (text && text.startsWith(plugin.command)) {
-            await plugin.run(sock, m);
-          }
-        });
-      }
-    });
-  }
+    const pluginFiles = fs.readdirSync(pluginFolder).filter(file => file.endsWith(".js"));
+    for (const file of pluginFiles) {
+      try {
+        const plugin = require(`./plugins/${file}`);
+        if (plugin.command && plugin.run) {
+          sock.ev.on("messages.upsert", async ({ messages }) => {
+            const m = messages[0];
+            if (!m.message || !m.key || m.key.fromMe) return;
 
-  sock.ev.on("connection.update", (update) => {
-    const { connection, pairingCode } = update;
-    if (pairingCode) {
-      rl.question("📱 Enter your WhatsApp number (with country code): ", async (number) => {
-        console.log(`🔗 Pair your device by visiting: https://web.whatsapp.com and entering this code:`);
-        console.log(`\n🔐 Pairing Code for ${number}: ${pairingCode}\n`);
-      });
+            const body = m.message.conversation || m.message.extendedTextMessage?.text || "";
+            if (body.startsWith(plugin.command)) {
+              try {
+                await plugin.run(sock, m);
+              } catch (err) {
+                console.error("Plugin error:", err);
+              }
+            }
+          });
+        }
+      } catch (err) {
+        console.error("Error loading plugin:", file, err);
+      }
     }
-    if (connection === "open") {
-      console.log("✅ Bot connected!");
-    }
-    if (connection === "close") {
-      console.log("❌ Connection closed. Restart Termux.");
-    }
-  });
-}
+  }
+};
 
 startBot();
